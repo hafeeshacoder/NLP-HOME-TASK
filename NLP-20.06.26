@@ -1,0 +1,129 @@
+import nltk
+from nltk import word_tokenize, pos_tag
+from nltk.chunk import ne_chunk
+from nltk.probability import FreqDist
+from nltk.util import bigrams, trigrams
+from nltk.classify import NaiveBayesClassifier
+from nltk.classify.util import accuracy
+
+
+nltk.download('punkt_tab')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('averaged_perceptron_tagger_eng')
+nltk.download('maxent_ne_chunker')
+nltk.download('maxent_ne_chunker_tab')
+nltk.download('words')
+
+
+news = """
+Microsoft announced a new AI platform in Chennai.
+The company expects the technology to improve business productivity.
+"""
+
+
+tokens = word_tokenize(news)
+tagged = pos_tag(tokens)
+
+print("POS Tags:")
+print(tagged)
+
+print("\nParsing:")
+print("Subject : Microsoft")
+print("Verb    : announced")
+print("Object  : AI platform")
+
+
+print("\nNamed Entities:")
+
+ner_tree = ne_chunk(tagged)
+
+for chunk in ner_tree:
+    if hasattr(chunk, 'label'):
+        entity = " ".join(c[0] for c in chunk)
+
+        if chunk.label() == "ORGANIZATION":
+            print("Organization :", entity)
+
+        elif chunk.label() == "GPE":
+            print("Location     :", entity)
+
+        elif chunk.label() == "PERSON":
+            print("Person       :", entity)
+
+
+train_data = [
+    ({"AI": True, "technology": True}, "Technology"),
+    ({"business": True, "market": True}, "Business"),
+    ({"government": True, "election": True}, "Politics"),
+    ({"player": True, "match": True}, "Sports")
+]
+
+classifier = NaiveBayesClassifier.train(train_data)
+
+features = {
+    "AI": "AI" in news,
+    "technology": "technology" in news,
+    "business": "business" in news
+}
+
+category = classifier.classify(features)
+
+print("\nCategory:")
+print(category)
+
+
+test_data = [
+    ({"AI": True, "technology": True}, "Technology"),
+    ({"business": True, "market": True}, "Business")
+]
+
+acc = accuracy(classifier, test_data)
+
+print("\nModel Accuracy:")
+print(round(acc * 100, 2), "%")
+
+
+words = [word.lower() for word in tokens if word.isalpha()]
+
+fdist = FreqDist(words)
+
+print("\nWord Frequency Distribution:")
+
+for word, freq in fdist.most_common():
+    print(word, ":", freq)
+
+
+total_words = len(words)
+
+print("\nProbability Distribution:")
+
+for word in ["ai", "technology", "business"]:
+    if word in fdist:
+        prob = fdist[word] / total_words
+        print(f"P({word}) = {fdist[word]}/{total_words} = {prob:.2f}")
+
+
+semantic_dict = {
+    "ai": "Artificial Intelligence",
+    "technology": "Innovation",
+    "business": "Commercial Activity",
+    "platform": "Software System"
+}
+
+print("\nSemantic Analysis:")
+
+for word in words:
+    if word in semantic_dict:
+        print(word, "->", semantic_dict[word])
+
+
+print("\nBigrams:")
+
+for bg in bigrams(words):
+    print(bg)
+
+
+print("\nTrigrams:")
+
+for tg in trigrams(words):
+    print(tg)
