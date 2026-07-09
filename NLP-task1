@@ -1,0 +1,282 @@
+from collections import defaultdict, Counter
+import re
+
+# -----------------------------
+# Configuration
+# -----------------------------
+MAX_N = 5
+DISCOUNT = 0.75
+OOV_TOKEN = "<UNK>"
+
+# -----------------------------
+# Language Model
+# -----------------------------
+class KneserNeyLanguageModel:
+
+    def __init__(self, n=5, discount=0.75):
+        self.n = n
+        self.discount = discount
+
+        # Sparse n-gram counts
+        self.ngram_counts = [defaultdict(int) for _ in range(n)]
+
+        # Context counts
+        self.context_counts = [defaultdict(int) for _ in range(n)]
+
+        # Vocabulary
+        self.vocab = Counter()
+
+        # Continuation statistics
+        self.continuation_sets = defaultdict(set)
+
+        self.total_continuations = 0
+
+    # ---------------------------------
+    # Tokenization
+    # ---------------------------------
+    def tokenize(self, text):
+
+        text = text.lower()
+
+        text = re.sub(r'[^a-z0-9 ]', '', text)
+
+        return text.split()
+
+    # ---------------------------------
+    # Train
+    # ---------------------------------
+    def train(self, corpus):
+
+        print("Training...")
+
+        for sentence in corpus:
+
+            tokens = ["<s>"] * (self.n - 1)
+
+            tokens += self.tokenize(sentence)
+
+            tokens += ["</s>"]
+
+            for word in tokens:
+                self.vocab[word] += 1
+
+            length = len(tokens)
+
+            for i in range(length):
+
+                for k in range(1, self.n + 1):
+
+                    if i + k > length:
+                        continue
+
+                    gram = tuple(tokens[i:i+k])
+
+                    self.ngram_counts[k-1][gram] += 1
+
+                    if k > 1:
+
+                        context = gram[:-1]
+
+                        self.context_counts[k-1][context] += 1
+
+                        self.continuation_sets[gram[-1]].add(context)
+
+        self.total_continuations = sum(
+            len(v)
+            for v in self.continuation_sets.values()
+        )
+
+        print("Vocabulary Size:", len(self.vocab))
+        print("Training Complete.")
+
+    # ---------------------------------
+    # Continuation Probability
+    # ---------------------------------
+    def continuation_probability(self, word):
+
+        if self.total_continuations == 0:
+            return 1e-9
+
+        return len(
+            self.continuation_sets[word]
+        ) / self.total_continuations
+
+    # ---------------------------------
+    # Recursive Kneser Ney Probability
+    # ---------------------------------
+    def probability(self, context, word):
+
+        if word not in self.vocab:
+            word = OOV_TOKEN
+
+        context = tuple(context)
+
+        order = len(context) + 1
+
+        if order <= 1:
+            return self.continuation_probability(word)
+
+        gram = context + (word,)
+
+        count = self.ngram_counts[order-1].get(gram, 0)
+
+        context_count = self.context_counts[order-1].get(context, 0)
+
+        if context_count == 0:
+
+            return self.probability(context[1:], word)
+
+        unique_followers = len([
+            g for g in self.ngram_counts[order-1]
+            if g[:-1] == context
+        ])
+
+        lambda_weight = (
+            self.discount *
+            unique_followers /
+            context_count
+        )
+
+        discounted = max(
+            count - self.discount,
+            0
+        ) / context_count
+
+        backoff = self.probability(context[1:], word)
+
+        return discounted + lambda_weight * backoff
+
+    # ---------------------------------
+    # Suggest Next Words
+    # ---------------------------------
+    def predict(self, query, top_k=5):
+
+        tokens = self.tokenize(query)
+
+        tokens = ["<s>"] * (self.n - 1) + tokens
+
+        context = tokens[-(self.n-1):]
+
+        scores = {}
+
+        for word in self.vocab:
+
+            if word.startswith("<"):
+                continue
+
+            scores[word] = self.probability(context, word)
+
+        predictions = sorted(
+            scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        return predictions[:top_k]
+
+    # ---------------------------------
+    # Autocomplete
+    # ---------------------------------
+    def autocomplete(self, query, top_k=5):
+
+        suggestions = self.predict(query, top_k)
+
+        print("\nUser Query :", query)
+        print("Suggestions:")
+
+        for word, score in suggestions:
+
+            print(
+                f"{query} {word} "
+                f"(Probability={score:.6f})"
+            )
+
+# ---------------------------------
+# Example Search Query Corpus
+# ---------------------------------
+
+corpus = [
+
+"best places to visit in india",
+
+"best places to visit in chennai",
+
+"best places to visit during summer",
+
+"best places to visit near me",
+
+"best places to visit in kerala",
+
+"best places to visit in tamil nadu",
+
+"best hotels in chennai",
+
+"best restaurants near me",
+
+"latest iphone launch event",
+
+"latest samsung mobile",
+
+"google pixel launch",
+
+"best colleges in india",
+
+"best colleges in chennai",
+
+"weather today in chennai",
+
+"weather tomorrow in india",
+
+"ipl live score today",
+
+"world cup live score",
+
+"python programming tutorial",
+
+"machine learning tutorial",
+
+"deep learning tutorial"
+
+]
+
+# ---------------------------------
+# Train Model
+# ---------------------------------
+
+model = KneserNeyLanguageModel(
+    n=5,
+    discount=0.75
+)
+
+model.train(corpus)
+
+# ---------------------------------
+# Test Queries
+# ---------------------------------
+
+model.autocomplete("best places to visit")
+
+model.autocomplete("best places")
+
+model.autocomplete("latest")
+
+model.autocomplete("weather")
+
+model.autocomplete("machine")
+
+model.autocomplete("best colleges")
+
+# ---------------------------------
+# Interactive Search
+# ---------------------------------
+
+print("\nType 'exit' to quit.")
+
+while True:
+
+    q = input("\nSearch: ")
+
+    if q.lower() == "exit":
+        break
+
+    model.autocomplete(q)
