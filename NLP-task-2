@@ -1,0 +1,329 @@
+# ==========================================
+# NLP Skill Task-2
+# Vectorized HMM & Viterbi POS Tagger
+# Dataset: pos_tags.csv
+# ==========================================
+
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    classification_report
+)
+
+# ==========================================
+# 1. LOAD DATASET
+# ==========================================
+
+df = pd.read_csv("pos_tags.csv")
+
+print("Dataset Shape:", df.shape)
+print(df.head())
+
+# ==========================================
+# 2. PREPROCESS DATA
+# ==========================================
+
+df["word"] = df["word"].astype(str).str.lower()
+df["tag"] = df["tag"].astype(str)
+
+# Since every sentence_id appears only once,
+# treat each row as a single-word sentence.
+
+sentences = []
+
+for _, row in df.iterrows():
+    sentences.append(
+        ([row["word"]], [row["tag"]])
+    )
+
+print("Total Sentences:", len(sentences))
+
+# ==========================================
+# 3. TRAIN TEST SPLIT
+# ==========================================
+
+train_sentences, test_sentences = train_test_split(
+    sentences,
+    test_size=0.2,
+    random_state=42
+)
+
+print("Train:", len(train_sentences))
+print("Test :", len(test_sentences))
+
+# ==========================================
+# 4. VOCABULARY & TAG SET
+# ==========================================
+
+all_tags = sorted(
+    list(
+        set(
+            tag
+            for sent in train_sentences
+            for tag in sent[1]
+        )
+    )
+)
+
+all_words = sorted(
+    list(
+        set(
+            word
+            for sent in train_sentences
+            for word in sent[0]
+        )
+    )
+)
+
+num_tags = len(all_tags)
+num_words = len(all_words)
+
+print("Unique Tags :", num_tags)
+print("Unique Words:", num_words)
+
+tag2idx = {tag:i for i, tag in enumerate(all_tags)}
+idx2tag = {i:tag for tag, i in tag2idx.items()}
+
+word2idx = {word:i for i, word in enumerate(all_words)}
+
+# ==========================================
+# 5. INITIAL, TRANSITION, EMISSION COUNTS
+#    WITH LAPLACE SMOOTHING
+# ==========================================
+
+initial_counts = np.ones(num_tags)
+
+transition_counts = np.ones(
+    (num_tags, num_tags)
+)
+
+emission_counts = np.ones(
+    (num_tags, num_words)
+)
+
+for words_seq, tags_seq in train_sentences:
+
+    first_tag = tags_seq[0]
+
+    initial_counts[
+        tag2idx[first_tag]
+    ] += 1
+
+    # transition counts
+    for i in range(len(tags_seq)-1):
+
+        current_tag = tag2idx[tags_seq[i]]
+        next_tag = tag2idx[tags_seq[i+1]]
+
+        transition_counts[
+            current_tag,
+            next_tag
+        ] += 1
+
+    # emission counts
+    for word, tag in zip(words_seq, tags_seq):
+
+        emission_counts[
+            tag2idx[tag],
+            word2idx[word]
+        ] += 1
+
+# ==========================================
+# 6. PROBABILITY MATRICES
+# ==========================================
+
+initial_prob = (
+    initial_counts /
+    initial_counts.sum()
+)
+
+transition_prob = (
+    transition_counts /
+    transition_counts.sum(axis=1, keepdims=True)
+)
+
+emission_prob = (
+    emission_counts /
+    emission_counts.sum(axis=1, keepdims=True)
+)
+
+# ==========================================
+# 7. LOG SPACE CONVERSION
+# ==========================================
+
+log_initial = np.log(initial_prob)
+
+log_transition = np.log(transition_prob)
+
+log_emission = np.log(emission_prob)
+
+# ==========================================
+# 8. VECTORIZED VITERBI ALGORITHM
+# ==========================================
+
+def viterbi(sentence):
+
+    T = len(sentence)
+
+    dp = np.full(
+        (num_tags, T),
+        -np.inf
+    )
+
+    backpointer = np.zeros(
+        (num_tags, T),
+        dtype=int
+    )
+
+    first_word = sentence[0]
+
+    if first_word in word2idx:
+        emission = log_emission[
+            :,
+            word2idx[first_word]
+        ]
+    else:
+        emission = np.log(
+            np.ones(num_tags) / num_words
+        )
+
+    dp[:, 0] = log_initial + emission
+
+    for t in range(1, T):
+
+        word = sentence[t]
+
+        if word in word2idx:
+            emission = log_emission[
+                :,
+                word2idx[word]
+            ]
+        else:
+            emission = np.log(
+                np.ones(num_tags) / num_words
+            )
+
+        scores = (
+            dp[:, t-1][:, None]
+            + log_transition
+        )
+
+        backpointer[:, t] = np.argmax(
+            scores,
+            axis=0
+        )
+
+        dp[:, t] = (
+            np.max(scores, axis=0)
+            + emission
+        )
+
+    best_path = np.zeros(
+        T,
+        dtype=int
+    )
+
+    best_path[-1] = np.argmax(
+        dp[:, T-1]
+    )
+
+    for t in range(T-2, -1, -1):
+
+        best_path[t] = backpointer[
+            best_path[t+1],
+            t+1
+        ]
+
+    predicted_tags = [
+        idx2tag[idx]
+        for idx in best_path
+    ]
+
+    return predicted_tags
+
+# ==========================================
+# 9. PREDICTION ON TEST SET
+# ==========================================
+
+y_true = []
+y_pred = []
+
+for words_seq, tags_seq in test_sentences:
+
+    prediction = viterbi(words_seq)
+
+    y_true.extend(tags_seq)
+    y_pred.extend(prediction)
+
+# ==========================================
+# 10. EVALUATION
+# ==========================================
+
+accuracy = accuracy_score(
+    y_true,
+    y_pred
+)
+
+precision, recall, f1, _ = (
+    precision_recall_fscore_support(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+)
+
+print("\n===== RESULTS =====")
+
+print(f"Accuracy  : {accuracy:.4f}")
+print(f"Precision : {precision:.4f}")
+print(f"Recall    : {recall:.4f}")
+print(f"F1 Score  : {f1:.4f}")
+
+print("\n===== CLASSIFICATION REPORT =====\n")
+
+print(
+    classification_report(
+        y_true,
+        y_pred,
+        zero_division=0
+    )
+)
+
+# ==========================================
+# 11. TEST ON UNSEEN SENTENCES
+# ==========================================
+
+unseen_sentences = [
+
+    "the cat sat on the mat",
+
+    "she is reading a book",
+
+    "i love natural language processing",
+
+    "machine learning is powerful",
+
+    "artificial intelligence changes the world"
+
+]
+
+print("\n===== UNSEEN SENTENCES =====\n")
+
+for sentence in unseen_sentences:
+
+    words = sentence.lower().split()
+
+    tags = viterbi(words)
+
+    print("\nSentence:")
+    print(sentence)
+
+    print("Predictions:")
+
+    for w, t in zip(words, tags):
+        print(f"{w:15} --> {t}")
