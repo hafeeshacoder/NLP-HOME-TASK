@@ -8,35 +8,24 @@ from nltk.stem import PorterStemmer
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Download stopwords
 nltk.download('stopwords')
 
-# Load dataset
-data = pd.read_csv("Musical_instruments_reviews.csv")
+# Load Dataset
+data = pd.read_csv("IMDB Dataset.csv")
 
 print(data.head())
 
-# Create Sentiment column from ratings
-def sentiment_label(rating):
-    if rating >= 4:
-        return "Positive"
-    elif rating == 3:
-        return "Neutral"
-    else:
-        return "Negative"
-
-data["Sentiment"] = data["overall"].apply(sentiment_label)
-
-# Remove missing reviews
-data = data.dropna(subset=["reviewText"])
+# Remove missing values
+data = data.dropna(subset=["review"])
 
 # Stopwords and Stemmer
 stop_words = set(stopwords.words("english"))
 stemmer = PorterStemmer()
 
-# Text preprocessing
+# Text Preprocessing
 def preprocess(text):
     text = str(text).lower()
     text = re.sub(r'[^a-zA-Z\s]', '', text)
@@ -44,16 +33,16 @@ def preprocess(text):
     words = [stemmer.stem(word) for word in words if word not in stop_words]
     return " ".join(words)
 
-# Clean review text
-data["Clean_Text"] = data["reviewText"].apply(preprocess)
+# Clean Review Text
+data["Clean_Text"] = data["review"].apply(preprocess)
 
-print(data[["reviewText", "Clean_Text", "Sentiment"]].head())
+print(data[["review", "Clean_Text", "sentiment"]].head())
 
 # Feature Extraction using TF-IDF
 tfidf = TfidfVectorizer()
 
 X = tfidf.fit_transform(data["Clean_Text"])
-y = data["Sentiment"]
+y = data["sentiment"]
 
 # Train-Test Split
 X_train, X_test, y_train, y_test = train_test_split(
@@ -75,19 +64,30 @@ prediction = model.predict(X_test)
 print("\nPredictions:")
 print(prediction)
 
+# Accuracy
 print("\nAccuracy:")
 print(accuracy_score(y_test, prediction))
 
+# Classification Report
 print("\nClassification Report:")
-print(classification_report(y_test, prediction, zero_division=0))
+print(classification_report(y_test, prediction))
+
+# Confusion Matrix
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, prediction))
 
 # Predict New Review
-new_review = ["This product is fantastic and I really love it"]
+new_review = [
+    "This movie was absolutely amazing. The acting and story were excellent."
+]
 
+# Preprocess New Review
 new_review_clean = [preprocess(review) for review in new_review]
 
+# Convert to TF-IDF
 new_text = tfidf.transform(new_review_clean)
 
+# Prediction
 result = model.predict(new_text)
 
 print("\nPrediction:")
