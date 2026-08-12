@@ -1,0 +1,262 @@
+import pandas as pd
+import re
+from nltk.metrics import edit_distance
+
+
+# ============================================================
+# 1. LOAD SPELLING-ERROR CORPUS
+# ============================================================
+
+df = pd.read_csv("spelling_corpus.csv")
+
+# Convert columns to lowercase and remove empty values
+df["correct_word"] = (
+    df["correct_word"]
+    .astype(str)
+    .str.lower()
+    .str.strip()
+)
+
+df["misspelled_word"] = (
+    df["misspelled_word"]
+    .astype(str)
+    .str.lower()
+    .str.strip()
+)
+
+
+# ============================================================
+# 2. BUILD VOCABULARY OF CORRECTLY SPELLED WORDS
+# ============================================================
+
+vocabulary = set(df["correct_word"])
+
+print("Vocabulary size:", len(vocabulary))
+
+
+# ============================================================
+# 3. TOKENIZE USER SEARCH QUERY
+# ============================================================
+
+def tokenize_query(query):
+
+    # Convert to lowercase
+    query = query.lower()
+
+    # Extract words
+    tokens = re.findall(r"[a-zA-Z]+", query)
+
+    return tokens
+
+
+# ============================================================
+# 4. FIND CLOSEST MATCHING WORD
+# ============================================================
+
+def find_closest_word(word):
+
+    # --------------------------------------------------------
+    # First check whether the word is directly available
+    # in the misspelled_word column.
+    # --------------------------------------------------------
+
+    match = df[
+        df["misspelled_word"] == word
+    ]
+
+    if not match.empty:
+
+        correct_word = match.iloc[0]["correct_word"]
+
+        distance = edit_distance(
+            word,
+            correct_word
+        )
+
+        return correct_word, distance
+
+
+    # --------------------------------------------------------
+    # If not found in corpus, use Edit Distance
+    # --------------------------------------------------------
+
+    best_word = None
+    min_distance = float("inf")
+
+    for candidate in vocabulary:
+
+        # Optimization:
+        # Ignore words with very different lengths
+        if abs(len(word) - len(candidate)) > 3:
+            continue
+
+        distance = edit_distance(
+            word,
+            candidate
+        )
+
+        if distance < min_distance:
+
+            min_distance = distance
+            best_word = candidate
+
+    return best_word, min_distance
+
+
+# ============================================================
+# 5. CORRECT SEARCH QUERY
+# ============================================================
+
+def correct_query(query):
+
+    # Tokenize query
+    tokens = tokenize_query(query)
+
+    corrected_words = []
+
+    incorrect_words = []
+
+    suggestions = []
+
+
+    # --------------------------------------------------------
+    # Check every word
+    # --------------------------------------------------------
+
+    for word in tokens:
+
+        # If word is already correctly spelled
+        if word in vocabulary:
+
+            corrected_words.append(word)
+
+        else:
+
+            # Word is not in vocabulary
+            incorrect_words.append(word)
+
+            # Find closest word
+            suggested_word, distance = find_closest_word(word)
+
+            suggestions.append(
+                (
+                    word,
+                    suggested_word,
+                    distance
+                )
+            )
+
+            corrected_words.append(
+                suggested_word
+            )
+
+
+    # Join corrected words
+    corrected_query = " ".join(
+        corrected_words
+    )
+
+    return (
+        tokens,
+        incorrect_words,
+        suggestions,
+        corrected_query
+    )
+
+
+# ============================================================
+# 6. DISPLAY RESULT
+# ============================================================
+
+def display_result(query):
+
+    (
+        tokens,
+        incorrect_words,
+        suggestions,
+        corrected_query
+    ) = correct_query(query)
+
+
+    print("\n==========================================")
+    print("       SEARCH QUERY SPELLING CORRECTOR")
+    print("==========================================")
+
+
+    # --------------------------------------------------------
+    # Original Query
+    # --------------------------------------------------------
+
+    print("\nOriginal Query:")
+    print(query)
+
+
+    # --------------------------------------------------------
+    # Tokenized Query
+    # --------------------------------------------------------
+
+    print("\nTokenized Query:")
+    print(tokens)
+
+
+    # --------------------------------------------------------
+    # Incorrect Words
+    # --------------------------------------------------------
+
+    print("\nIncorrect Words:")
+
+    if len(incorrect_words) == 0:
+
+        print("No spelling errors found.")
+
+    else:
+
+        for word in incorrect_words:
+
+            print("-", word)
+
+
+    # --------------------------------------------------------
+    # Suggested Corrections
+    # --------------------------------------------------------
+
+    print("\nSuggested Corrections:")
+
+    if len(suggestions) == 0:
+
+        print("No corrections required.")
+
+    else:
+
+        for (
+            wrong_word,
+            correct_word,
+            distance
+        ) in suggestions:
+
+            print(
+                f"{wrong_word} → {correct_word} "
+                f"(Edit Distance: {distance})"
+            )
+
+
+    # --------------------------------------------------------
+    # Final Corrected Query
+    # --------------------------------------------------------
+
+    print("\nFinal Corrected Query:")
+    print(corrected_query)
+
+
+    print("\n==========================================")
+
+
+# ============================================================
+# 7. ACCEPT USER SEARCH QUERY
+# ============================================================
+
+query = input(
+    "\nEnter your search query: "
+)
+
+display_result(query)
