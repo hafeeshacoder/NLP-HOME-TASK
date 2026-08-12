@@ -1,0 +1,139 @@
+# ============================================
+# CUSTOMER REVIEW CLEANING SYSTEM
+# E-commerce Review Preprocessing
+# ============================================
+
+# Import libraries
+import pandas as pd
+import re
+import string
+import nltk
+
+# Download required NLTK resources
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+
+
+# ============================================
+# 1. LOAD DATASET
+# ============================================
+
+file_name = "IMDB_Dataset_CLEANED.csv"
+
+df = pd.read_csv(file_name)
+
+print("Dataset loaded successfully!")
+print("Number of rows:", len(df))
+print("\nFirst 5 rows:")
+print(df.head())
+
+
+# ============================================
+# 2. CHECK COLUMN NAMES
+# ============================================
+
+print("\nColumn names:")
+print(df.columns)
+
+
+# ============================================
+# 3. CREATE NLP TOOLS
+# ============================================
+
+# English stopwords
+stop_words = set(stopwords.words("english"))
+
+# Lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+
+# ============================================
+# 4. TEXT CLEANING FUNCTION
+# ============================================
+
+def clean_review(text):
+
+    # Convert value to string
+    text = str(text)
+
+    # Step 1: Convert text to lowercase
+    text = text.lower()
+
+    # Step 2: Remove HTML tags
+    text = re.sub(r"<.*?>", "", text)
+
+    # Step 3: Remove URLs
+    text = re.sub(r"http\S+|www\S+", "", text)
+
+    # Step 4: Remove punctuation
+    text = text.translate(str.maketrans("", "", string.punctuation))
+
+    # Step 5: Remove numbers
+    text = re.sub(r"\d+", "", text)
+
+    # Step 6: Remove extra spaces
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Step 7: Tokenization
+    words = word_tokenize(text)
+
+    # Step 8: Remove stopwords
+    words = [
+        word for word in words
+        if word not in stop_words
+    ]
+
+    # Step 9: Lemmatization
+    words = [
+        lemmatizer.lemmatize(word)
+        for word in words
+    ]
+
+    # Step 10: Join words
+    cleaned_text = " ".join(words)
+
+    return cleaned_text
+
+
+# ============================================
+# 5. APPLY CLEANING TO DATASET
+# ============================================
+
+# Change "review" if your dataset uses another column name
+df["cleaned_review"] = df["review"].apply(clean_review)
+
+
+# ============================================
+# 6. DISPLAY ORIGINAL AND CLEANED REVIEWS
+# ============================================
+
+print("\n============================================")
+print("ORIGINAL VS CLEANED REVIEWS")
+print("============================================")
+
+for i in range(5):
+
+    print("\nOriginal Review:")
+    print(df["review"].iloc[i])
+
+    print("\nCleaned Review:")
+    print(df["cleaned_review"].iloc[i])
+
+    print("--------------------------------------------")
+
+
+# ============================================
+# 7. SAVE CLEANED DATASET
+# ============================================
+
+output_file = "IMDB_Dataset_CLEANED_Final.csv"
+
+df.to_csv(output_file, index=False)
+
+print("\nCleaned dataset saved successfully!")
+print("File name:", output_file)
