@@ -1,0 +1,178 @@
+# ============================================
+# SEARCH QUERY SPELLING CORRECTOR
+# Real-Time Application: Search Engine / Autocomplete
+# Dataset: spelling_corpus.csv
+# ============================================
+
+import pandas as pd
+import numpy as np
+import re
+
+
+# ============================================
+# 1. LOAD DATASET
+# ============================================
+
+file_name = "spelling_corpus.csv"
+
+df = pd.read_csv(file_name)
+
+print("Dataset loaded successfully!")
+print("\nDataset shape:")
+print(df.shape)
+
+print("\nColumn names:")
+print(df.columns.tolist())
+
+print("\nFirst 5 rows:")
+print(df.head())
+
+
+# ============================================
+# 2. FIND DATASET COLUMNS
+# ============================================
+
+# Remove spaces from column names
+df.columns = df.columns.str.strip().str.lower()
+
+print("\nUpdated column names:")
+print(df.columns.tolist())
+
+
+# ============================================
+# 3. CREATE SPELLING DICTIONARY
+# ============================================
+
+# Try to find common column names automatically
+
+wrong_column = None
+correct_column = None
+
+for column in df.columns:
+
+    if column in ["misspelled", "misspelling", "wrong", "error", "incorrect"]:
+        wrong_column = column
+
+    if column in ["correct", "corrected", "right", "word"]:
+        correct_column = column
+
+
+# If columns are not detected, use the first two columns
+if wrong_column is None or correct_column is None:
+
+    print("\nUsing first two columns of the dataset.")
+
+    wrong_column = df.columns[0]
+    correct_column = df.columns[1]
+
+
+print("\nWrong word column:", wrong_column)
+print("Correct word column:", correct_column)
+
+
+# ============================================
+# 4. CREATE DICTIONARY
+# ============================================
+
+spelling_dict = {}
+
+for wrong, correct in zip(
+    df[wrong_column],
+    df[correct_column]
+):
+
+    wrong = str(wrong).lower().strip()
+    correct = str(correct).lower().strip()
+
+    spelling_dict[wrong] = correct
+
+
+print("\nNumber of spelling corrections:")
+print(len(spelling_dict))
+
+
+# ============================================
+# 5. CLEAN USER TEXT
+# ============================================
+
+def clean_text(text):
+
+    # Convert to lowercase
+    text = text.lower()
+
+    # Remove special characters
+    text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
+
+    # Remove extra spaces
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
+# ============================================
+# 6. SPELLING CORRECTION FUNCTION
+# ============================================
+
+def correct_spelling(sentence):
+
+    # Clean sentence
+    sentence = clean_text(sentence)
+
+    # Split sentence into words
+    words = sentence.split()
+
+    corrected_words = []
+
+    for word in words:
+
+        # Check if word is misspelled
+        if word in spelling_dict:
+
+            corrected_word = spelling_dict[word]
+
+        else:
+
+            # Keep original word
+            corrected_word = word
+
+        corrected_words.append(corrected_word)
+
+    # Join words again
+    corrected_sentence = " ".join(corrected_words)
+
+    return corrected_sentence
+
+
+# ============================================
+# 7. SEARCH QUERY INPUT
+# ============================================
+
+print("\n============================================")
+print("SEARCH QUERY SPELLING CORRECTOR")
+print("============================================")
+
+query = input("\nEnter your search query: ")
+
+
+# ============================================
+# 8. CORRECT QUERY
+# ============================================
+
+corrected_query = correct_spelling(query)
+
+
+# ============================================
+# 9. DISPLAY RESULT
+# ============================================
+
+print("\n--------------------------------------------")
+
+print("Original Query:")
+print(query)
+
+print("\nCorrected Query:")
+print(corrected_query)
+
+print("--------------------------------------------")
+
+print("\nSpelling correction completed!")
