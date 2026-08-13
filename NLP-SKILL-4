@@ -1,0 +1,260 @@
+# ============================================
+# ASSIGNMENT SIMILARITY / PLAGIARISM DETECTOR
+# ============================================
+
+# Import libraries
+import pandas as pd
+import numpy as np
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+# ============================================
+# 1. LOAD DATASET
+# ============================================
+
+file_name = "Text_Similarity_Dataset.csv"
+
+df = pd.read_csv(file_name)
+
+print("Dataset loaded successfully!")
+
+print("\nDataset Shape:")
+print(df.shape)
+
+print("\nColumn Names:")
+print(df.columns.tolist())
+
+print("\nFirst 5 Rows:")
+print(df.head())
+
+
+# ============================================
+# 2. CLEAN COLUMN NAMES
+# ============================================
+
+df.columns = df.columns.str.strip().str.lower()
+
+print("\nUpdated Column Names:")
+print(df.columns.tolist())
+
+
+# ============================================
+# 3. FIND TEXT COLUMNS
+# ============================================
+
+# Display columns so we can identify them
+print("\nAvailable columns:")
+for column in df.columns:
+    print(column)
+
+
+# Usually the dataset contains text1 and text2
+text1_column = "text1"
+text2_column = "text2"
+
+
+# ============================================
+# 4. REMOVE EMPTY VALUES
+# ============================================
+
+df[text1_column] = df[text1_column].fillna("")
+df[text2_column] = df[text2_column].fillna("")
+
+
+# ============================================
+# 5. CREATE TF-IDF VECTORIZER
+# ============================================
+
+vectorizer = TfidfVectorizer(
+    lowercase=True,
+    stop_words="english"
+)
+
+
+# ============================================
+# 6. CALCULATE SIMILARITY FOR DATASET
+# ============================================
+
+print("\nCalculating similarity...")
+
+similarity_scores = []
+
+
+for i in range(len(df)):
+
+    # Get two texts
+    text1 = df[text1_column].iloc[i]
+    text2 = df[text2_column].iloc[i]
+
+    # Convert both texts into TF-IDF vectors
+    tfidf = vectorizer.fit_transform([
+        text1,
+        text2
+    ])
+
+    # Calculate cosine similarity
+    similarity = cosine_similarity(
+        tfidf[0:1],
+        tfidf[1:2]
+    )[0][0]
+
+    # Convert to percentage
+    similarity_percentage = similarity * 100
+
+    similarity_scores.append(similarity_percentage)
+
+
+# ============================================
+# 7. ADD SIMILARITY SCORE TO DATASET
+# ============================================
+
+df["similarity_percentage"] = np.round(
+    similarity_scores,
+    2
+)
+
+
+# ============================================
+# 8. DISPLAY RESULTS
+# ============================================
+
+print("\n============================================")
+print("SIMILARITY RESULTS")
+print("============================================")
+
+print(
+    df[
+        [
+            text1_column,
+            text2_column,
+            "similarity_percentage"
+        ]
+    ].head(10)
+)
+
+
+# ============================================
+# 9. PLAGIARISM DECISION
+# ============================================
+
+def check_plagiarism(score):
+
+    if score >= 70:
+        return "High Similarity - Possible Plagiarism"
+
+    elif score >= 40:
+        return "Medium Similarity"
+
+    else:
+        return "Low Similarity"
+
+
+df["result"] = df["similarity_percentage"].apply(
+    check_plagiarism
+)
+
+
+# ============================================
+# 10. DISPLAY FINAL RESULTS
+# ============================================
+
+print("\n============================================")
+print("PLAGIARISM DETECTION RESULTS")
+print("============================================")
+
+print(
+    df[
+        [
+            "similarity_percentage",
+            "result"
+        ]
+    ].head(10)
+)
+
+
+# ============================================
+# 11. USER INPUT
+# ============================================
+
+print("\n============================================")
+print("CHECK YOUR OWN ASSIGNMENTS")
+print("============================================")
+
+assignment1 = input(
+    "\nEnter Assignment 1: "
+)
+
+assignment2 = input(
+    "\nEnter Assignment 2: "
+)
+
+
+# ============================================
+# 12. TF-IDF FOR USER INPUT
+# ============================================
+
+user_tfidf = vectorizer.fit_transform(
+    [
+        assignment1,
+        assignment2
+    ]
+)
+
+
+# ============================================
+# 13. CALCULATE USER SIMILARITY
+# ============================================
+
+user_similarity = cosine_similarity(
+    user_tfidf[0:1],
+    user_tfidf[1:2]
+)[0][0]
+
+
+user_percentage = user_similarity * 100
+
+
+# ============================================
+# 14. DISPLAY USER RESULT
+# ============================================
+
+print("\n============================================")
+print("YOUR ASSIGNMENT RESULT")
+print("============================================")
+
+print(
+    "Similarity:",
+    round(user_percentage, 2),
+    "%"
+)
+
+
+if user_percentage >= 70:
+
+    print("Result: HIGH SIMILARITY")
+    print("Possible plagiarism detected.")
+
+elif user_percentage >= 40:
+
+    print("Result: MEDIUM SIMILARITY")
+    print("Some similar content found.")
+
+else:
+
+    print("Result: LOW SIMILARITY")
+    print("Assignments are mostly different.")
+
+
+# ============================================
+# 15. SAVE RESULTS
+# ============================================
+
+df.to_csv(
+    "Text_Similarity_Results.csv",
+    index=False
+)
+
+print("\nResults saved to:")
+print("Text_Similarity_Results.csv")
