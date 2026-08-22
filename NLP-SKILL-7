@@ -1,0 +1,985 @@
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+import random
+import re
+
+from torch.utils.data import Dataset, DataLoader
+
+
+# ============================================================
+# 1. CONFIGURATION
+# ============================================================
+
+DATASET_PATH = "English-Tamil-Parallel-Corpus.csv"
+
+BATCH_SIZE = 32
+EMBEDDING_DIM = 256
+HIDDEN_DIM = 512
+NUM_LAYERS = 1
+
+LEARNING_RATE = 0.001
+EPOCHS = 10
+
+MAX_LENGTH = 50
+
+DEVICE = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+print("Using Device:", DEVICE)
+
+
+# ============================================================
+# 2. LOAD DATASET
+# ============================================================
+
+df = pd.read_csv(DATASET_PATH)
+
+print("\nDataset Shape:")
+print(df.shape)
+
+print("\nColumns:")
+print(df.columns)
+
+print("\nFirst 5 Rows:")
+print(df.head())
+
+
+# ============================================================
+# 3. COLUMN NAMES
+# ============================================================
+
+SOURCE_COLUMN = "english"
+TARGET_COLUMN = "tamil"
+
+if SOURCE_COLUMN not in df.columns:
+    raise ValueError(
+        f"Column '{SOURCE_COLUMN}' not found.\n"
+        f"Available columns: {list(df.columns)}"
+    )
+
+if TARGET_COLUMN not in df.columns:
+    raise ValueError(
+        f"Column '{TARGET_COLUMN}' not found.\n"
+        f"Available columns: {list(df.columns)}"
+    )
+
+
+# ============================================================
+# 4. CLEAN DATA
+# ============================================================
+
+df = df[
+    [SOURCE_COLUMN, TARGET_COLUMN]
+].dropna()
+
+df = df.drop_duplicates()
+
+df[SOURCE_COLUMN] = (
+    df[SOURCE_COLUMN]
+    .astype(str)
+    .str.strip()
+)
+
+df[TARGET_COLUMN] = (
+    df[TARGET_COLUMN]
+    .astype(str)
+    .str.strip()
+)
+
+# Remove empty rows
+df = df[
+    (df[SOURCE_COLUMN] != "") &
+    (df[TARGET_COLUMN] != "")
+]
+
+print("\nClean Dataset Shape:")
+print(df.shape)
+
+
+# ============================================================
+# 5. TEXT TOKENIZATION
+# ============================================================
+
+def tokenize_english(sentence):
+
+    sentence = sentence.lower()
+
+    sentence = re.sub(
+        r"[^a-zA-Z\s]",
+        "",
+        sentence
+    )
+
+    return sentence.split()
+
+
+def tokenize_tamil(sentence):
+
+    # Tamil Unicode range
+    tokens = re.findall(
+        r"[\u0B80-\u0BFF]+",
+        sentence
+    )
+
+    return tokens
+
+
+# ============================================================
+# 6. SPECIAL TOKENS
+# ============================================================
+
+PAD_TOKEN = "<pad>"
+UNK_TOKEN = "<unk>"
+SOS_TOKEN = "<sos>"
+EOS_TOKEN = "<eos>"
+
+
+# ============================================================
+# 7. BUILD VOCABULARY
+# ============================================================
+
+def build_vocab(sentences, tokenizer):
+
+    vocab = {
+        PAD_TOKEN: 0,
+        UNK_TOKEN: 1,
+        SOS_TOKEN: 2,
+        EOS_TOKEN: 3
+    }
+
+    for sentence in sentences:
+
+        tokens = tokenizer(sentence)
+
+        for token in tokens:
+
+            if token not in vocab:
+
+                vocab[token] = len(vocab)
+
+    return vocab
+
+
+english_vocab = build_vocab(
+    df[SOURCE_COLUMN],
+    tokenize_english
+)
+
+tamil_vocab = build_vocab(
+    df[TARGET_COLUMN],
+    tokenize_tamil
+)
+
+
+print("\nEnglish Vocabulary Size:")
+print(len(english_vocab))
+
+print("\nTamil Vocabulary Size:")
+print(len(tamil_vocab))
+
+
+# ============================================================
+# 8. REVERSE VOCABULARY
+# ============================================================
+
+english_index_to_word = {
+    index: word
+    for word, index in english_vocab.items()
+}
+
+tamil_index_to_word = {
+    index: word
+    for word, index in tamil_vocab.items()
+}
+
+
+# ============================================================
+# 9. CONVERT SENTENCE TO NUMBERS
+# ============================================================
+
+def sentence_to_indices(
+    sentence,
+    vocab,
+    tokenizer
+):
+
+    tokens = tokenizer(sentence)
+
+    tokens = tokens[
+        :MAX_LENGTH - 2
+    ]
+
+    indices = [
+        vocab[SOS_TOKEN]
+    ]
+
+    for token in tokens:
+
+        if token in vocab:
+
+            indices.append(
+                vocab[token]
+            )
+
+        else:
+
+            indices.append(
+                vocab[UNK_TOKEN]
+            )
+
+    indices.append(
+        vocab[EOS_TOKEN]
+    )
+
+    return indices
+
+
+# ============================================================
+# 10. PAD SENTENCE
+# ============================================================
+
+def pad_sequence(
+    sequence,
+    max_length=MAX_LENGTH
+):
+
+    if len(sequence) < max_length:
+
+        sequence = sequence + [
+            english_vocab[PAD_TOKEN]
+        ] * (
+            max_length - len(sequence)
+        )
+
+    else:
+
+        sequence = sequence[
+            :max_length
+        ]
+
+    return sequence
+
+
+# ============================================================
+# 11. DATASET CLASS
+# ============================================================
+
+class TranslationDataset(Dataset):
+
+    def __init__(self, dataframe):
+
+        self.data = dataframe
+
+    def __len__(self):
+
+        return len(self.data)
+
+    def __getitem__(self, index):
+
+        english_sentence = self.data.iloc[
+            index
+        ][SOURCE_COLUMN]
+
+        tamil_sentence = self.data.iloc[
+            index
+        ][TARGET_COLUMN]
+
+        english_sequence = sentence_to_indices(
+            english_sentence,
+            english_vocab,
+            tokenize_english
+        )
+
+        tamil_sequence = sentence_to_indices(
+            tamil_sentence,
+            tamil_vocab,
+            tokenize_tamil
+        )
+
+        # English padding
+        if len(english_sequence) < MAX_LENGTH:
+
+            english_sequence += [
+                english_vocab[PAD_TOKEN]
+            ] * (
+                MAX_LENGTH -
+                len(english_sequence)
+            )
+
+        else:
+
+            english_sequence = (
+                english_sequence[:MAX_LENGTH]
+            )
+
+        # Tamil padding
+        if len(tamil_sequence) < MAX_LENGTH:
+
+            tamil_sequence += [
+                tamil_vocab[PAD_TOKEN]
+            ] * (
+                MAX_LENGTH -
+                len(tamil_sequence)
+            )
+
+        else:
+
+            tamil_sequence = (
+                tamil_sequence[:MAX_LENGTH]
+            )
+
+        return (
+            torch.tensor(
+                english_sequence,
+                dtype=torch.long
+            ),
+            torch.tensor(
+                tamil_sequence,
+                dtype=torch.long
+            )
+        )
+
+
+# ============================================================
+# 12. TRAIN / TEST SPLIT
+# ============================================================
+
+train_size = int(
+    0.8 * len(df)
+)
+
+train_df = df.iloc[
+    :train_size
+]
+
+test_df = df.iloc[
+    train_size:
+]
+
+print("\nTraining Samples:", len(train_df))
+print("Testing Samples:", len(test_df))
+
+
+# ============================================================
+# 13. DATA LOADERS
+# ============================================================
+
+train_dataset = TranslationDataset(
+    train_df
+)
+
+test_dataset = TranslationDataset(
+    test_df
+)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+
+# ============================================================
+# 14. ENCODER
+# ============================================================
+
+class Encoder(nn.Module):
+
+    def __init__(
+        self,
+        input_size,
+        embedding_dim,
+        hidden_dim
+    ):
+
+        super().__init__()
+
+        self.embedding = nn.Embedding(
+            input_size,
+            embedding_dim,
+            padding_idx=0
+        )
+
+        self.lstm = nn.LSTM(
+            embedding_dim,
+            hidden_dim,
+            batch_first=True
+        )
+
+    def forward(self, source):
+
+        embedded = self.embedding(
+            source
+        )
+
+        outputs, (hidden, cell) = (
+            self.lstm(embedded)
+        )
+
+        return outputs, hidden, cell
+
+
+# ============================================================
+# 15. ATTENTION
+# ============================================================
+
+class Attention(nn.Module):
+
+    def __init__(self, hidden_dim):
+
+        super().__init__()
+
+        self.attention = nn.Linear(
+            hidden_dim * 2,
+            hidden_dim
+        )
+
+        self.v = nn.Linear(
+            hidden_dim,
+            1,
+            bias=False
+        )
+
+    def forward(
+        self,
+        hidden,
+        encoder_outputs
+    ):
+
+        # hidden:
+        # [batch, hidden]
+
+        batch_size = (
+            encoder_outputs.shape[0]
+        )
+
+        source_length = (
+            encoder_outputs.shape[1]
+        )
+
+        hidden = hidden.unsqueeze(1)
+
+        hidden = hidden.repeat(
+            1,
+            source_length,
+            1
+        )
+
+        energy = torch.tanh(
+            self.attention(
+                torch.cat(
+                    (
+                        hidden,
+                        encoder_outputs
+                    ),
+                    dim=2
+                )
+            )
+        )
+
+        attention = self.v(
+            energy
+        ).squeeze(2)
+
+        return torch.softmax(
+            attention,
+            dim=1
+        )
+
+
+# ============================================================
+# 16. DECODER
+# ============================================================
+
+class Decoder(nn.Module):
+
+    def __init__(
+        self,
+        output_size,
+        embedding_dim,
+        hidden_dim,
+        attention
+    ):
+
+        super().__init__()
+
+        self.output_size = output_size
+
+        self.attention = attention
+
+        self.embedding = nn.Embedding(
+            output_size,
+            embedding_dim,
+            padding_idx=0
+        )
+
+        self.lstm = nn.LSTM(
+            embedding_dim + hidden_dim,
+            hidden_dim,
+            batch_first=True
+        )
+
+        self.fc = nn.Linear(
+            embedding_dim +
+            hidden_dim +
+            hidden_dim,
+            output_size
+        )
+
+    def forward(
+        self,
+        input_token,
+        hidden,
+        cell,
+        encoder_outputs
+    ):
+
+        input_token = input_token.unsqueeze(
+            1
+        )
+
+        embedded = self.embedding(
+            input_token
+        )
+
+        attention_weights = (
+            self.attention(
+                hidden[-1],
+                encoder_outputs
+            )
+        )
+
+        attention_weights = (
+            attention_weights.unsqueeze(1)
+        )
+
+        context = torch.bmm(
+            attention_weights,
+            encoder_outputs
+        )
+
+        rnn_input = torch.cat(
+            (
+                embedded,
+                context
+            ),
+            dim=2
+        )
+
+        output, (hidden, cell) = (
+            self.lstm(
+                rnn_input,
+                (hidden, cell)
+            )
+        )
+
+        prediction = self.fc(
+            torch.cat(
+                (
+                    embedded.squeeze(1),
+                    output.squeeze(1),
+                    context.squeeze(1)
+                ),
+                dim=1
+            )
+        )
+
+        return (
+            prediction,
+            hidden,
+            cell,
+            attention_weights.squeeze(1)
+        )
+
+
+# ============================================================
+# 17. SEQ2SEQ MODEL
+# ============================================================
+
+class Seq2Seq(nn.Module):
+
+    def __init__(
+        self,
+        encoder,
+        decoder,
+        device
+    ):
+
+        super().__init__()
+
+        self.encoder = encoder
+        self.decoder = decoder
+        self.device = device
+
+    def forward(
+        self,
+        source,
+        target,
+        teacher_forcing_ratio=0.5
+    ):
+
+        batch_size = source.shape[0]
+
+        target_length = target.shape[1]
+
+        target_vocab_size = (
+            self.decoder.output_size
+        )
+
+        outputs = torch.zeros(
+            batch_size,
+            target_length,
+            target_vocab_size
+        ).to(self.device)
+
+        encoder_outputs, hidden, cell = (
+            self.encoder(source)
+        )
+
+        input_token = target[:, 0]
+
+        for t in range(
+            1,
+            target_length
+        ):
+
+            output, hidden, cell, _ = (
+                self.decoder(
+                    input_token,
+                    hidden,
+                    cell,
+                    encoder_outputs
+                )
+            )
+
+            outputs[:, t] = output
+
+            best_prediction = (
+                output.argmax(1)
+            )
+
+            teacher_force = (
+                random.random()
+                < teacher_forcing_ratio
+            )
+
+            input_token = (
+                target[:, t]
+                if teacher_force
+                else best_prediction
+            )
+
+        return outputs
+
+
+# ============================================================
+# 18. CREATE MODEL
+# ============================================================
+
+encoder = Encoder(
+    input_size=len(english_vocab),
+    embedding_dim=EMBEDDING_DIM,
+    hidden_dim=HIDDEN_DIM
+)
+
+attention = Attention(
+    HIDDEN_DIM
+)
+
+decoder = Decoder(
+    output_size=len(tamil_vocab),
+    embedding_dim=EMBEDDING_DIM,
+    hidden_dim=HIDDEN_DIM,
+    attention=attention
+)
+
+model = Seq2Seq(
+    encoder,
+    decoder,
+    DEVICE
+).to(DEVICE)
+
+
+print("\nModel Created Successfully!")
+
+
+# ============================================================
+# 19. LOSS FUNCTION
+# ============================================================
+
+PAD_INDEX = tamil_vocab[
+    PAD_TOKEN
+]
+
+criterion = nn.CrossEntropyLoss(
+    ignore_index=PAD_INDEX
+)
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=LEARNING_RATE
+)
+
+
+# ============================================================
+# 20. TRAINING FUNCTION
+# ============================================================
+
+def train_model():
+
+    model.train()
+
+    total_loss = 0
+
+    for source, target in train_loader:
+
+        source = source.to(DEVICE)
+        target = target.to(DEVICE)
+
+        optimizer.zero_grad()
+
+        output = model(
+            source,
+            target
+        )
+
+        output_dim = output.shape[-1]
+
+        output = output[
+            1:
+        ].reshape(
+            -1,
+            output_dim
+        )
+
+        target = target[
+            1:
+        ].reshape(-1)
+
+        loss = criterion(
+            output,
+            target
+        )
+
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            1
+        )
+
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    return (
+        total_loss /
+        len(train_loader)
+    )
+
+
+# ============================================================
+# 21. TRAIN MODEL
+# ============================================================
+
+print("\n===================================")
+print("TRAINING MODEL")
+print("===================================")
+
+for epoch in range(EPOCHS):
+
+    loss = train_model()
+
+    print(
+        f"Epoch [{epoch + 1}/{EPOCHS}] "
+        f"Loss: {loss:.4f}"
+    )
+
+
+# ============================================================
+# 22. SAVE MODEL
+# ============================================================
+
+torch.save(
+    {
+        "model_state_dict": model.state_dict(),
+        "english_vocab": english_vocab,
+        "tamil_vocab": tamil_vocab
+    },
+    "english_tamil_attention_model.pth"
+)
+
+print(
+    "\nModel saved as "
+    "english_tamil_attention_model.pth"
+)
+
+
+# ============================================================
+# 23. TRANSLATION FUNCTION
+# ============================================================
+
+def translate_sentence(sentence):
+
+    model.eval()
+
+    # Convert English sentence to numbers
+    tokens = tokenize_english(
+        sentence
+    )
+
+    tokens = tokens[
+        :MAX_LENGTH - 2
+    ]
+
+    sequence = [
+        english_vocab[SOS_TOKEN]
+    ]
+
+    for token in tokens:
+
+        sequence.append(
+            english_vocab.get(
+                token,
+                english_vocab[UNK_TOKEN]
+            )
+        )
+
+    sequence.append(
+        english_vocab[EOS_TOKEN]
+    )
+
+    # Padding
+    sequence += [
+        english_vocab[PAD_TOKEN]
+    ] * (
+        MAX_LENGTH -
+        len(sequence)
+    )
+
+    source = torch.tensor(
+        [sequence],
+        dtype=torch.long
+    ).to(DEVICE)
+
+    with torch.no_grad():
+
+        encoder_outputs, hidden, cell = (
+            model.encoder(source)
+        )
+
+    input_token = torch.tensor(
+        [
+            tamil_vocab[SOS_TOKEN]
+        ],
+        dtype=torch.long
+    ).to(DEVICE)
+
+    translated_words = []
+
+    with torch.no_grad():
+
+        for _ in range(MAX_LENGTH):
+
+            output, hidden, cell, attention = (
+                model.decoder(
+                    input_token,
+                    hidden,
+                    cell,
+                    encoder_outputs
+                )
+            )
+
+            prediction = output.argmax(
+                1
+            ).item()
+
+            if prediction == tamil_vocab[
+                EOS_TOKEN
+            ]:
+
+                break
+
+            if prediction != tamil_vocab[
+                PAD_TOKEN
+            ]:
+
+                translated_words.append(
+                    tamil_index_to_word[
+                        prediction
+                    ]
+                )
+
+            input_token = torch.tensor(
+                [prediction],
+                dtype=torch.long
+            ).to(DEVICE)
+
+    return " ".join(
+        translated_words
+    )
+
+
+# ============================================================
+# 24. TEST TRANSLATION
+# ============================================================
+
+print("\n===================================")
+print("ENGLISH → TAMIL TRANSLATOR")
+print("===================================")
+
+test_sentences = [
+    "I am happy",
+    "How are you",
+    "What is your name",
+    "I love my country",
+    "Good morning"
+]
+
+for sentence in test_sentences:
+
+    translation = translate_sentence(
+        sentence
+    )
+
+    print("\nEnglish :", sentence)
+    print("Tamil   :", translation)
+
+
+# ============================================================
+# 25. INTERACTIVE TRANSLATOR
+# ============================================================
+
+print("\n===================================")
+print("INTERACTIVE TRANSLATOR")
+print("Type 'exit' to stop")
+print("===================================")
+
+while True:
+
+    sentence = input(
+        "\nEnter English sentence: "
+    )
+
+    if sentence.lower() == "exit":
+
+        print("Translator stopped.")
+        break
+
+    translation = translate_sentence(
+        sentence
+    )
+
+    print(
+        "Tamil Translation:",
+        translation
+    )
