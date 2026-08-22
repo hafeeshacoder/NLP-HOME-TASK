@@ -1,0 +1,533 @@
+import pandas as pd
+import numpy as np
+import re
+import torch
+import torch.nn as nn
+
+from collections import Counter
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+
+# ============================================================
+# 1. LOAD DATASET
+# ============================================================
+
+DATASET_PATH = "IMDB_Dataset_CLEANED.csv"
+
+df = pd.read_csv(DATASET_PATH)
+
+print("Dataset Shape:", df.shape)
+print("\nColumns:")
+print(df.columns)
+
+print("\nFirst 5 rows:")
+print(df.head())
+
+
+# ============================================================
+# 2. CHECK COLUMN NAMES
+# ============================================================
+
+# Expected columns:
+# review    -> movie review text
+# sentiment -> positive / negative
+
+TEXT_COLUMN = "review"
+LABEL_COLUMN = "sentiment"
+
+if TEXT_COLUMN not in df.columns:
+    raise ValueError(
+        f"Column '{TEXT_COLUMN}' not found. "
+        f"Available columns: {list(df.columns)}"
+    )
+
+if LABEL_COLUMN not in df.columns:
+    raise ValueError(
+        f"Column '{LABEL_COLUMN}' not found. "
+        f"Available columns: {list(df.columns)}"
+    )
+
+
+# Remove missing values
+df = df[[TEXT_COLUMN, LABEL_COLUMN]].dropna()
+
+# Remove duplicate reviews
+df = df.drop_duplicates()
+
+print("\nClean Dataset Shape:", df.shape)
+
+
+# ============================================================
+# 3. CLEAN TEXT
+# ============================================================
+
+def clean_text(text):
+    text = str(text).lower()
+
+    # Remove HTML tags
+    text = re.sub(r"<.*?>", " ", text)
+
+    # Keep only alphabets and spaces
+    text = re.sub(r"[^a-zA-Z\s]", " ", text)
+
+    # Remove extra spaces
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+df[TEXT_COLUMN] = df[TEXT_COLUMN].apply(clean_text)
+
+
+# ============================================================
+# 4. CONVERT SENTIMENT TO NUMBERS
+# ============================================================
+
+# positive = 1
+# negative = 0
+
+def encode_sentiment(label):
+    label = str(label).lower().strip()
+
+    if label in ["positive", "pos", "1"]:
+        return 1
+    elif label in ["negative", "neg", "0"]:
+        return 0
+    else:
+        return np.nan
+
+
+df["label"] = df[LABEL_COLUMN].apply(encode_sentiment)
+
+# Remove unknown labels
+df = df.dropna(subset=["label"])
+
+df["label"] = df["label"].astype(int)
+
+print("\nSentiment Distribution:")
+print(df["label"].value_counts())
+
+
+# ============================================================
+# 5. TOKENIZATION
+# ============================================================
+
+def tokenize(text):
+    return text.split()
+
+
+tokenized_reviews = df[TEXT_COLUMN].apply(tokenize)
+
+
+# ============================================================
+# 6. BUILD VOCABULARY
+# ============================================================
+
+counter = Counter()
+
+for review in tokenized_reviews:
+    counter.update(review)
+
+
+# Maximum vocabulary size
+MAX_VOCAB_SIZE = 10000
+
+# Reserve:
+# 0 -> <PAD>
+# 1 -> <UNK>
+
+vocab = {
+    "<PAD>": 0,
+    "<UNK>": 1
+}
+
+for word, count in counter.most_common(MAX_VOCAB_SIZE - 2):
+    vocab[word] = len(vocab)
+
+
+print("\nVocabulary Size:", len(vocab))
+
+
+# ============================================================
+# 7. CONVERT TEXT INTO INTEGER SEQUENCES
+# ============================================================
+
+def text_to_sequence(text):
+    tokens = tokenize(text)
+
+    sequence = []
+
+    for word in tokens:
+        if word in vocab:
+            sequence.append(vocab[word])
+        else:
+            sequence.append(vocab["<UNK>"])
+
+    return sequence
+
+
+sequences = df[TEXT_COLUMN].apply(text_to_sequence).tolist()
+labels = df["label"].values
+
+
+# ============================================================
+# 8. PAD / TRUNCATE SEQUENCES
+# ============================================================
+
+MAX_LENGTH = 200
+
+
+def pad_sequence(sequence, max_length=MAX_LENGTH):
+
+    if len(sequence) > max_length:
+        sequence = sequence[:max_length]
+
+    else:
+        sequence = sequence + [vocab["<PAD>"]] * (
+            max_length - len(sequence)
+        )
+
+    return sequence
+
+
+X = np.array([
+    pad_sequence(sequence)
+    for sequence in sequences
+])
+
+y = np.array(labels)
+
+
+print("\nInput Shape:", X.shape)
+print("Label Shape:", y.shape)
+
+
+# ============================================================
+# 9. TRAIN / TEST SPLIT
+# ============================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining Samples:", len(X_train))
+print("Testing Samples:", len(X_test))
+
+
+# ============================================================
+# 10. CONVERT TO PYTORCH TENSORS
+# ============================================================
+
+X_train = torch.tensor(X_train, dtype=torch.long)
+X_test = torch.tensor(X_test, dtype=torch.long)
+
+y_train = torch.tensor(y_train, dtype=torch.float32)
+y_test = torch.tensor(y_test, dtype=torch.float32)
+
+
+# ============================================================
+# 11. CREATE DATA LOADERS
+# ============================================================
+
+from torch.utils.data import TensorDataset, DataLoader
+
+
+BATCH_SIZE = 64
+
+train_dataset = TensorDataset(X_train, y_train)
+test_dataset = TensorDataset(X_test, y_test)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+
+# ============================================================
+# 12. LSTM MODEL
+# ============================================================
+
+class SentimentLSTM(nn.Module):
+
+    def __init__(
+        self,
+        vocab_size,
+        embedding_dim=128,
+        hidden_dim=128,
+        num_layers=2,
+        dropout=0.3
+    ):
+
+        super(SentimentLSTM, self).__init__()
+
+        # Word Embedding
+        self.embedding = nn.Embedding(
+            vocab_size,
+            embedding_dim,
+            padding_idx=0
+        )
+
+        # LSTM
+        self.lstm = nn.LSTM(
+            input_size=embedding_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+
+        # Fully Connected Layer
+        self.fc = nn.Linear(
+            hidden_dim,
+            1
+        )
+
+    def forward(self, x):
+
+        # Embedding
+        embedded = self.embedding(x)
+
+        # LSTM
+        output, (hidden, cell) = self.lstm(embedded)
+
+        # Last hidden state
+        hidden = hidden[-1]
+
+        # Dropout
+        hidden = self.dropout(hidden)
+
+        # Output
+        output = self.fc(hidden)
+
+        return output.squeeze(1)
+
+
+# ============================================================
+# 13. SELECT DEVICE
+# ============================================================
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+print("\nUsing Device:", device)
+
+
+# ============================================================
+# 14. CREATE MODEL
+# ============================================================
+
+model = SentimentLSTM(
+    vocab_size=len(vocab),
+    embedding_dim=128,
+    hidden_dim=128,
+    num_layers=2,
+    dropout=0.3
+)
+
+model = model.to(device)
+
+print("\nModel:")
+print(model)
+
+
+# ============================================================
+# 15. LOSS FUNCTION & OPTIMIZER
+# ============================================================
+
+criterion = nn.BCEWithLogitsLoss()
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=0.001
+)
+
+
+# ============================================================
+# 16. TRAINING
+# ============================================================
+
+EPOCHS = 5
+
+print("\nStarting Training...\n")
+
+for epoch in range(EPOCHS):
+
+    model.train()
+
+    total_loss = 0
+
+    for reviews, labels_batch in train_loader:
+
+        reviews = reviews.to(device)
+        labels_batch = labels_batch.to(device)
+
+        # Clear gradients
+        optimizer.zero_grad()
+
+        # Forward pass
+        predictions = model(reviews)
+
+        # Calculate loss
+        loss = criterion(
+            predictions,
+            labels_batch
+        )
+
+        # Backpropagation
+        loss.backward()
+
+        # Update weights
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    average_loss = total_loss / len(train_loader)
+
+    print(
+        f"Epoch [{epoch + 1}/{EPOCHS}] "
+        f"Loss: {average_loss:.4f}"
+    )
+
+
+# ============================================================
+# 17. EVALUATION
+# ============================================================
+
+model.eval()
+
+all_predictions = []
+all_labels = []
+
+with torch.no_grad():
+
+    for reviews, labels_batch in test_loader:
+
+        reviews = reviews.to(device)
+
+        outputs = model(reviews)
+
+        probabilities = torch.sigmoid(outputs)
+
+        predictions = (
+            probabilities >= 0.5
+        ).int()
+
+        all_predictions.extend(
+            predictions.cpu().numpy()
+        )
+
+        all_labels.extend(
+            labels_batch.numpy()
+        )
+
+
+# Accuracy
+accuracy = accuracy_score(
+    all_labels,
+    all_predictions
+)
+
+print("\n===================================")
+print("MODEL PERFORMANCE")
+print("===================================")
+
+print(
+    f"Test Accuracy: {accuracy * 100:.2f}%"
+)
+
+print("\nClassification Report:")
+
+print(
+    classification_report(
+        all_labels,
+        all_predictions,
+        target_names=[
+            "Negative",
+            "Positive"
+        ]
+    )
+)
+
+
+# ============================================================
+# 18. PREDICT NEW REVIEW
+# ============================================================
+
+def predict_sentiment(review):
+
+    model.eval()
+
+    # Clean review
+    review = clean_text(review)
+
+    # Convert to sequence
+    sequence = text_to_sequence(review)
+
+    # Pad sequence
+    sequence = pad_sequence(sequence)
+
+    # Convert to tensor
+    tensor = torch.tensor(
+        [sequence],
+        dtype=torch.long
+    ).to(device)
+
+    with torch.no_grad():
+
+        output = model(tensor)
+
+        probability = torch.sigmoid(
+            output
+        ).item()
+
+    if probability >= 0.5:
+        sentiment = "Positive"
+    else:
+        sentiment = "Negative"
+
+    return sentiment, probability
+
+
+# ============================================================
+# 19. TEST THE MODEL
+# ============================================================
+
+print("\n===================================")
+print("CUSTOMER REVIEW SENTIMENT TEST")
+print("===================================")
+
+test_reviews = [
+    "This movie was absolutely amazing and I loved every minute of it.",
+    "The movie was boring and a complete waste of time.",
+    "Excellent acting and wonderful story.",
+    "I hated this movie. It was terrible."
+]
+
+
+for review in test_reviews:
+
+    sentiment, probability = predict_sentiment(
+        review
+    )
+
+    print("\nReview:", review)
+    print("Sentiment:", sentiment)
+    print(
+        f"Confidence: {probability * 100:.2f}%"
+    )
