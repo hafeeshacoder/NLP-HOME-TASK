@@ -1,0 +1,393 @@
+
+# ============================================================
+# BERT CUSTOMER FEEDBACK CLASSIFIER
+# Dataset: Local IMDb Dataset CSV
+# ============================================================
+
+%pip install -q transformers torch scikit-learn pandas matplotlib seaborn tqdm
+
+import os
+import re
+import pandas as pd
+import torch
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification
+)
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
+from torch.utils.data import Dataset, DataLoader
+from tqdm.auto import tqdm
+
+# 1. CONFIGURATION
+DATASET_PATH = "IMDB Dataset.csv"  # Change to your filename
+MODEL_NAME = "distilbert-base-uncased"
+
+LABELS = ["Negative", "Positive"]
+MAX_LENGTH = 128
+BATCH_SIZE = 8
+EPOCHS = 2
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+print("Device:", device)
+
+# 2. LOAD YOUR LOCAL DATASET
+if not os.path.exists(DATASET_PATH):
+    raise FileNotFoundError(
+        f"Dataset not found: {DATASET_PATH}\n"
+        "Place your CSV in the notebook folder or provide its full path."
+    )
+
+df = pd.read_csv(DATASET_PATH)
+
+print("\nDataset shape:", df.shape)
+print("Columns:", df.columns.tolist())
+print(df.head())
+
+# 3. IDENTIFY TEXT AND SENTIMENT COLUMNS
+# Standard IMDb Dataset.csv usually has review and sentiment columns.
+df.columns = df.columns.str.strip().str.lower()
+
+if "review" not in df.columns or "sentiment" not in df.columns:
+    raise ValueError(
+        "Expected columns 'review' and 'sentiment'. "
+        "Please check your CSV column names."
+    )
+
+df = df[["review", "sentiment"]].dropna()
+df["review"] = df["review"].astype(str)
+
+df["sentiment"] = (
+    df["sentiment"].astype(str).str.strip().str.lower()
+)
+
+df = df[df["sentiment"].isin(["positive", "negative"])].copy()
+
+df["label"] = df["sentiment"].map({
+    "negative": 0,
+    "positive": 1
+})
+
+df = df.drop_duplicates(subset=["review"]).reset_index(drop=True)
+
+print("\nCleaned dataset shape:", df.shape)
+print("\nSentiment distribution:")
+print(df["sentiment"].value_counts())
+
+# 4. VISUALIZE THE DATASET
+sns.countplot(data=df, x="sentiment", order=LABELS)
+plt.title("IMDb Sentiment Distribution")
+plt.xlabel("Sentiment")
+plt.ylabel("Number of Reviews")
+plt.tight_layout()
+plt.show()
+
+# 5. SPLIT INTO TRAINING AND TESTING DATA
+# A smaller subset makes local CPU training more manageable.
+# Set SAMPLE_SIZE = None to use the entire dataset.
+SAMPLE_SIZE = 4000
+
+if SAMPLE_SIZE is not None and SAMPLE_SIZE < len(df):
+    df, _ = train_test_split(
+        df,
+        train_size=SAMPLE_SIZE,
+        random_state=42,
+        stratify=df["label"]
+    )
+
+train_df, test_df = train_test_split(
+    df,
+    test_size=0.20,
+    random_state=42,
+    stratify=df["label"]
+)
+
+print("\nTraining reviews:", len(train_df))
+print("Testing reviews:", len(test_df))
+
+# 6. LOAD TOKENIZER
+print("\nLoading tokenizer...")
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+sample_review = str(train_df.iloc[0]["review"])
+
+sample_tokens = tokenizer(
+    sample_review,
+    truncation=True,
+    padding="max_length",
+    max_length=MAX_LENGTH,
+    return_tensors="pt"
+)
+
+print("\nSample review:", sample_review[:300])
+print("\nInput IDs:", sample_tokens["input_ids"])
+print("\nAttention mask:", sample_tokens["attention_mask"])
+
+# 7. CREATE PYTORCH DATASET
+class ReviewDataset(Dataset):
+    def __init__(self, dataframe, tokenizer, max_length):
+        self.reviews = dataframe["review"].tolist()
+        self.labels = dataframe["label"].astype(int).tolist()
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.reviews)
+
+    def __getitem__(self, index):
+        encoded = self.tokenizer(
+            self.reviews[index],
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_length,
+            return_tensors="pt"
+        )
+
+        return {
+            "input_ids": encoded["input_ids"].squeeze(0),
+            "attention_mask": encoded["attention_mask"].squeeze(0),
+            "labels": torch.tensor(
+                self.labels[index],
+                dtype=torch.long
+            )
+        }
+
+train_dataset = ReviewDataset(
+    train_df, tokenizer, MAX_LENGTH
+)
+
+test_dataset = ReviewDataset(
+    test_df, tokenizer, MAX_LENGTH
+)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+# 8. LOAD PRETRAINED TRANSFORMER FOR CLASSIFICATION
+print("\nLoading classification model...")
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_NAME,
+    num_labels=2
+)
+
+model.to(device)
+
+# 9. FINE-TUNE THE MODEL
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=2e-5
+)
+
+for epoch in range(EPOCHS):
+    model.train()
+    total_loss = 0
+
+    progress = tqdm(
+        train_loader,
+        desc=f"Epoch {epoch + 1}/{EPOCHS}"
+    )
+
+    for batch in progress:
+        batch = {
+            key: value.to(device)
+            for key, value in batch.items()
+        }
+
+        optimizer.zero_grad()
+
+        outputs = model(**batch)
+        loss = outputs.loss
+
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+        progress.set_postfix(
+            loss=f"{loss.item():.4f}"
+        )
+
+    print(
+        f"Epoch {epoch + 1} average loss: "
+        f"{total_loss / len(train_loader):.4f}"
+    )
+
+print("\nTraining completed!")
+
+# 10. EVALUATE THE MODEL
+model.eval()
+
+all_predictions = []
+all_labels = []
+all_probabilities = []
+
+with torch.no_grad():
+    for batch in tqdm(test_loader, desc="Evaluating"):
+        labels = batch["labels"].to(device)
+
+        inputs = {
+            key: value.to(device)
+            for key, value in batch.items()
+            if key != "labels"
+        }
+
+        outputs = model(**inputs)
+
+        probabilities = torch.softmax(
+            outputs.logits, dim=-1
+        )
+
+        predictions = torch.argmax(
+            probabilities, dim=-1
+        )
+
+        all_predictions.extend(predictions.cpu().tolist())
+        all_labels.extend(labels.cpu().tolist())
+        all_probabilities.extend(probabilities.cpu().tolist())
+
+# 11. CLASSIFICATION REPORT
+print("\n" + "=" * 55)
+print("CLASSIFICATION REPORT")
+print("=" * 55)
+
+print(
+    f"Accuracy: "
+    f"{accuracy_score(all_labels, all_predictions) * 100:.2f}%"
+)
+
+print(
+    classification_report(
+        all_labels,
+        all_predictions,
+        labels=[0, 1],
+        target_names=LABELS,
+        digits=4,
+        zero_division=0
+    )
+)
+
+# 12. CONFUSION MATRIX
+cm = confusion_matrix(
+    all_labels,
+    all_predictions,
+    labels=[0, 1]
+)
+
+plt.figure(figsize=(7, 5))
+
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt="d",
+    cmap="Blues",
+    xticklabels=LABELS,
+    yticklabels=LABELS
+)
+
+plt.title("BERT IMDb Sentiment Confusion Matrix")
+plt.xlabel("Predicted Sentiment")
+plt.ylabel("Actual Sentiment")
+plt.tight_layout()
+plt.show()
+
+# 13. PREDICT NEW CUSTOMER FEEDBACK
+def classify_feedback(text):
+    model.eval()
+
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=MAX_LENGTH
+    )
+
+    inputs = {
+        key: value.to(device)
+        for key, value in inputs.items()
+    }
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        probabilities = torch.softmax(
+            outputs.logits, dim=-1
+        )[0]
+
+    predicted_id = int(probabilities.argmax().item())
+
+    return {
+        "feedback": text,
+        "sentiment": LABELS[predicted_id],
+        "confidence": float(probabilities[predicted_id]) * 100
+    }
+
+examples = [
+    "The product is excellent and the service was amazing.",
+    "This was a terrible experience. I am very disappointed.",
+    "The support team solved my problem quickly.",
+    "The quality was poor and my complaint was ignored."
+]
+
+print("\nNEW FEEDBACK PREDICTIONS")
+
+for example in examples:
+    result = classify_feedback(example)
+
+    print("\nFeedback:", result["feedback"])
+    print("Predicted sentiment:", result["sentiment"])
+    print(f"Confidence: {result['confidence']:.2f}%")
+
+# 14. SAVE MODEL AND TOKENIZER
+OUTPUT_DIR = "bert_customer_feedback_model"
+
+model.save_pretrained(OUTPUT_DIR)
+tokenizer.save_pretrained(OUTPUT_DIR)
+
+print("\nModel saved in:", OUTPUT_DIR)
+
+# 15. EXPORT EVALUATION RESULTS
+results_df = test_df[["review"]].reset_index(drop=True).copy()
+
+results_df["actual_sentiment"] = [
+    LABELS[label] for label in all_labels
+]
+
+results_df["predicted_sentiment"] = [
+    LABELS[label] for label in all_predictions
+]
+
+results_df["confidence_percent"] = [
+    max(probabilities) * 100
+    for probabilities in all_probabilities
+]
+
+results_df.to_csv(
+    "bert_customer_feedback_results.csv",
+    index=False
+)
+
+print("Evaluation results saved successfully!")
+print(results_df.head())
+
+print("\nPROJECT COMPLETED SUCCESSFULLY!")
