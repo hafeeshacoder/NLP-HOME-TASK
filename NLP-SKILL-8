@@ -1,0 +1,27 @@
+import pandas as pd
+import os
+
+# Dataset folder path
+folder_path = "ag_news_transformer_dataset"
+
+# Load training and testing datasets
+train_df = pd.read_csv(
+    os.path.join(folder_path, "ag_news_train.csv")
+)
+
+test_df = pd.read_csv(
+    os.path.join(folder_path, "ag_news_test.csv")
+)
+
+# Display dataset details
+print("Training dataset shape:", train_df.shape)
+print("Testing dataset shape:", test_df.shape)
+
+print("\nTraining data:")
+display(train_df.head())
+
+print("\nTesting data:")
+display(test_df.head())
+
+print("\nNews categories:")
+print(train_df["category"].value_counts())
